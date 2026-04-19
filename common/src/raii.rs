@@ -1,5 +1,6 @@
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 
+// Owned Handle
 pub struct OwnedHandle {
     handle: HANDLE,
 }

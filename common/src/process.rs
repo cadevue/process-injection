@@ -1,7 +1,11 @@
 use std::{ffi::OsString, os::windows::ffi::OsStringExt};
 
+use windows_sys::Win32::Foundation::{FALSE, HANDLE};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
+use windows_sys::Win32::System::Threading::{
+    OpenProcess, PROCESS_ACCESS_RIGHTS, PROCESS_ALL_ACCESS,
 };
 
 use crate::OwnedHandle;
@@ -37,4 +41,12 @@ pub fn find_pid_by_name(name: &str) -> Option<u32> {
             return None;
         }
     }
+}
+
+pub fn open_process(pid: u32, access_right: Option<PROCESS_ACCESS_RIGHTS>) -> Option<OwnedHandle> {
+    let ar = access_right.unwrap_or(PROCESS_ALL_ACCESS);
+    let h: HANDLE = unsafe { OpenProcess(ar, FALSE, pid) };
+    let oh = OwnedHandle::new(h)?;
+
+    Some(oh)
 }

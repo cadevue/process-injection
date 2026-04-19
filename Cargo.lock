@@ -7,6 +7,7 @@ name = "attack_01_dll_injection"
 version = "0.1.0"
 dependencies = [
  "common",
+ "windows-sys",
 ]
 
 [[package]]
