@@ -1,4 +1,5 @@
 use std::os::windows::ffi::OsStrExt;
+use std::time;
 
 use common::raii::{HandleRAII, RemoteAllocRAII};
 use common::utils::{find_pid_by_name, open_process};
@@ -14,6 +15,8 @@ use windows_sys::Win32::System::Threading::{
 use windows_sys::core::{BOOL, PCSTR};
 
 fn main() {
+    println!("Started with PID {}.", std::process::id());
+
     let victim_name = "victim.exe";
 
     let dll_path_arg = std::env::args().nth(1).expect("Usage: attack_01_dll_injection.exe <payload dll path>");
@@ -92,4 +95,7 @@ fn main() {
     unsafe {
         WaitForSingleObject(thread_h.as_raw(), 5000);
     }
+
+    // Dummy! Make this readable by ETW
+    std::thread::sleep(time::Duration::from_secs(60));
 }
