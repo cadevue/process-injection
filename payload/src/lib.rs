@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 use std::ptr::null_mut;
 
-use common::HandleRAII;
+use common::raii::HandleRAII;
 use windows_sys::Win32::Foundation::{HANDLE, HINSTANCE, TRUE};
 use windows_sys::Win32::System::Threading::CreateThread;
 

@@ -8,7 +8,7 @@ use windows_sys::Win32::System::Threading::{
     OpenProcess, PROCESS_ACCESS_RIGHTS, PROCESS_ALL_ACCESS,
 };
 
-use crate::HandleRAII;
+use crate::raii::HandleRAII;
 
 /// Traversing process snapshot and find pid for a specified process name.
 /// https://learn.microsoft.com/en-us/windows/win32/toolhelp/taking-a-snapshot-and-viewing-processes
