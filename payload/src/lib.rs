@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 use std::ptr::null_mut;
 
-use common::OwnedHandle;
+use common::HandleRAII;
 use windows_sys::Win32::Foundation::{HANDLE, HINSTANCE, TRUE};
 use windows_sys::Win32::System::Threading::CreateThread;
 
@@ -23,24 +23,23 @@ extern "system" fn DllMain(_: HINSTANCE, call_reason: u32, _: *mut c_void) -> BO
                 null_mut(),
             )
         };
-        let _ = OwnedHandle::new(h); // Automatic cleanup
+        let _ = HandleRAII::new(h); // Automatic cleanup
     }
 
     TRUE
 }
 
 unsafe extern "system" fn attach_routine(_: *mut c_void) -> u32 {
-    let title: Vec<u16> = "Warning".encode_utf16().chain(Some(0)).collect();
-    let message: Vec<u16> = "Your spaceship has been hijacked!"
-        .encode_utf16()
-        .chain(Some(0))
-        .collect();
+    let title_utf16: Vec<u16> = "Warning".encode_utf16().chain(Some(0)).collect();
+
+    let msg_str = format!("Your spaceship [{}] has been hijacked!", std::process::id());
+    let msg_utf16: Vec<u16> = msg_str.encode_utf16().chain(Some(0)).collect();
     unsafe {
         // Create a message box
         MessageBoxW(
             std::ptr::null_mut(),
-            message.as_ptr(),
-            title.as_ptr(),
+            msg_utf16.as_ptr(),
+            title_utf16.as_ptr(),
             MB_OK | MB_ICONWARNING,
         );
     };

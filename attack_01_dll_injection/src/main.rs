@@ -1,10 +1,8 @@
-use common::{OwnedHandle, find_pid_by_name, open_process};
+use common::{HandleRAII, RemoteAllocRAII, find_pid_by_name, open_process};
 use windows_sys::Win32::Foundation::{FALSE, GetLastError, HMODULE};
 use windows_sys::Win32::System::Diagnostics::Debug::WriteProcessMemory;
 use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
-use windows_sys::Win32::System::Memory::{
-    MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, VirtualAllocEx, VirtualFreeEx,
-};
+use windows_sys::Win32::System::Memory::PAGE_READWRITE;
 use windows_sys::Win32::System::Threading::{
     CreateRemoteThread, PROCESS_CREATE_THREAD, PROCESS_QUERY_INFORMATION, PROCESS_VM_OPERATION,
     PROCESS_VM_WRITE, WaitForSingleObject,
@@ -28,28 +26,15 @@ fn main() {
         .expect("Couldn't get victim handle. Is victim still running?");
 
     // Allocate Memory for DLL Path
-    let alloc_addr = unsafe {
-        VirtualAllocEx(
-            victim.as_raw(),
-            std::ptr::null_mut(),
-            dll_path.len() * 2,
-            MEM_RESERVE | MEM_COMMIT,
-            PAGE_READWRITE,
-        )
-    };
-    if alloc_addr.is_null() {
-        eprintln!("Failed to Alloc Virtual Memory: {}", unsafe {
-            GetLastError()
-        });
-        return;
-    }
+    let alloc_addr = RemoteAllocRAII::new(&victim, dll_path.len() * 2, PAGE_READWRITE)
+        .expect("Failed to Allocate Adrress on Process");
 
     // Write DLL Path to Memory
     let mut bytes_written = 0;
     let w_success: BOOL = unsafe {
         WriteProcessMemory(
             victim.as_raw(),
-            alloc_addr,
+            alloc_addr.as_ptr(),
             dll_path.as_ptr() as _,
             dll_path.len() * 2,
             &mut bytes_written,
@@ -75,8 +60,8 @@ fn main() {
     }
     let load_lib_addr = unsafe {
         std::mem::transmute::<
-            std::option::Option<unsafe extern "system" fn() -> isize>,
-            std::option::Option<unsafe extern "system" fn(*mut std::ffi::c_void) -> u32>,
+            Option<unsafe extern "system" fn() -> isize>,
+            Option<unsafe extern "system" fn(*mut std::ffi::c_void) -> u32>,
         >(load_lib_addr)
     };
 
@@ -87,16 +72,15 @@ fn main() {
             std::ptr::null_mut(),
             0,
             load_lib_addr,
-            alloc_addr.cast_const(),
+            alloc_addr.as_ptr().cast_const(),
             0,
             std::ptr::null_mut(),
         )
     };
-    let toh = OwnedHandle::new(thread_h).expect("Unable to Retrieve Thread Handle");
+    let toh = HandleRAII::new(thread_h).expect("Unable to Retrieve Thread Handle");
 
-    // Wait for Running & Cleanup
+    // Wait for Running
     unsafe {
         WaitForSingleObject(toh.as_raw(), 5000);
-        VirtualFreeEx(victim.as_raw(), alloc_addr, 0, MEM_RELEASE);
     }
 }

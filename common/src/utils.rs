@@ -8,13 +8,13 @@ use windows_sys::Win32::System::Threading::{
     OpenProcess, PROCESS_ACCESS_RIGHTS, PROCESS_ALL_ACCESS,
 };
 
-use crate::OwnedHandle;
+use crate::HandleRAII;
 
 /// Traversing process snapshot and find pid for a specified process name.
 /// https://learn.microsoft.com/en-us/windows/win32/toolhelp/taking-a-snapshot-and-viewing-processes
 pub fn find_pid_by_name(name: &str) -> Option<u32> {
     let raw_snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
-    let snapshot = OwnedHandle::new(raw_snapshot)?;
+    let snapshot = HandleRAII::new(raw_snapshot)?;
 
     let mut pe32: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
     pe32.dwSize = size_of::<PROCESSENTRY32W>() as u32;
@@ -43,10 +43,10 @@ pub fn find_pid_by_name(name: &str) -> Option<u32> {
     }
 }
 
-pub fn open_process(pid: u32, access_right: Option<PROCESS_ACCESS_RIGHTS>) -> Option<OwnedHandle> {
+pub fn open_process(pid: u32, access_right: Option<PROCESS_ACCESS_RIGHTS>) -> Option<HandleRAII> {
     let ar = access_right.unwrap_or(PROCESS_ALL_ACCESS);
     let h: HANDLE = unsafe { OpenProcess(ar, FALSE, pid) };
-    let oh = OwnedHandle::new(h)?;
+    let oh = HandleRAII::new(h)?;
 
     Some(oh)
 }
