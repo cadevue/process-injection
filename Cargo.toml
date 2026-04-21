@@ -5,4 +5,4 @@ members = [
     "common",   # Shared Utilities
     "victim",   # Injected process
     "attack_01_dll_injection"
-]
+, "attack_02_pe_injection"]

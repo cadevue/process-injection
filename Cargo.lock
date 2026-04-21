@@ -11,6 +11,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "attack_02_pe_injection"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
 name = "common"
 version = "0.1.0"
 dependencies = [
