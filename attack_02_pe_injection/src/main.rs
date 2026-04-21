@@ -38,7 +38,6 @@ fn main() {
         return;
     }
     let opt_magic_str = match opt_magic {
-        0x10B => "PE32",
         0x20B => "PE32+",
         _ => "unknown",
     };
@@ -51,9 +50,9 @@ fn main() {
         _ => "unknown",
     };
 
-    let sections_count = nt_h.FileHeader.NumberOfSections;
+    let sections_count = nt_h.FileHeader.NumberOfSections as usize;
     let img_base = nt_h.OptionalHeader.ImageBase;
-    let size_of_img = nt_h.OptionalHeader.SizeOfImage;
+    let size_of_img = nt_h.OptionalHeader.SizeOfImage as usize;
 
     println!("\nPE Information");
     println!();
@@ -71,26 +70,45 @@ fn main() {
 
     println!();
     println!("[Section Headers]");
-    let base_offset = lfanew as usize + size_of::<IMAGE_NT_HEADERS64>();
+    let headers_sz = nt_h.OptionalHeader.SizeOfHeaders as usize;
 
     // alloc
+    let alloc = ManagedVirtualAlloc::new(size_of_img, PAGE_READWRITE)
+        .expect("Failed to Allocate Memory for payload");
+    let section_h_size = size_of::<IMAGE_SECTION_HEADER>();
 
+    unsafe {
+        ptr::copy_nonoverlapping(pe.as_ptr(), alloc.as_ptr() as *mut u8, headers_sz);
+    }
+
+    let base_offset = lfanew as usize + size_of::<IMAGE_NT_HEADERS64>();
     for section_idx in 0..sections_count {
-        let section_offset = base_offset + section_idx as usize * size_of::<IMAGE_SECTION_HEADER>();
+        let section_offset = base_offset + section_idx as usize * section_h_size;
         let img_section_h_offset = unsafe { pe.as_ptr().add(section_offset) };
         let img_section_h = unsafe { ptr::read_unaligned(img_section_h_offset as *const IMAGE_SECTION_HEADER) };
 
         let name = str::from_utf8(&img_section_h.Name).unwrap_or("unknown").trim_end_matches('\0');
-        let rva = img_section_h.VirtualAddress;
+        let r_addr = img_section_h.PointerToRawData as usize;
+        let r_data_sz = img_section_h.SizeOfRawData as usize;
+        let rva = img_section_h.VirtualAddress as usize;
         let vsize = unsafe { img_section_h.Misc.VirtualSize } as usize;
         let characteristic = img_section_h.Characteristics;
 
         println!("  {name}");
-        println!("    Virtual Address : {rva}");
-        println!("    Virtual Size    : {vsize}");
-        println!("    Characteristics : {characteristic:#x}");
+        println!("    Pointer to Raw Data : {r_addr:#x}");
+        println!("    Raw Data Size       : {r_data_sz:#x}");
+        println!("    Virtual Address     : {rva:#x}");
+        println!("    Virtual Size        : {vsize:#x}");
+        println!("    Characteristics     : {characteristic:#x}");
         
         // copy/write this section image to the allocated adress
+        let pe_loc = unsafe { pe.as_ptr().add(r_addr) };
+        let dst_alloc = unsafe { alloc.as_ptr().add(rva) };
+
+        let sec_cp_sz = std::cmp::min(vsize, r_data_sz);
+        unsafe {
+            ptr::copy_nonoverlapping(pe_loc, dst_alloc as *mut u8, sec_cp_sz);
+        }
         // ...
     }
 
