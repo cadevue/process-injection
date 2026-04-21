@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 use std::ptr::null_mut;
 
-use common::raii::HandleRAII;
+use common::raii::ManagedHandle;
 use windows_sys::Win32::Foundation::{HANDLE, HINSTANCE, TRUE};
 use windows_sys::Win32::System::Threading::CreateThread;
 
@@ -23,7 +23,7 @@ extern "system" fn DllMain(_: HINSTANCE, call_reason: u32, _: *mut c_void) -> BO
                 null_mut(),
             )
         };
-        let _ = HandleRAII::new(h); // Automatic cleanup
+        let _ = ManagedHandle::new(h); // Automatic cleanup
     }
 
     TRUE

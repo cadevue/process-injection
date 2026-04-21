@@ -14,6 +14,7 @@ dependencies = [
 name = "attack_02_pe_injection"
 version = "0.1.0"
 dependencies = [
+ "common",
  "windows-sys",
 ]
 

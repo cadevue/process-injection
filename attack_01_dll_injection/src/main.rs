@@ -1,7 +1,7 @@
 use std::os::windows::ffi::OsStrExt;
 use std::time;
 
-use common::raii::{HandleRAII, RemoteAllocRAII};
+use common::raii::{ManagedHandle, ManagedVirtualAllocEx};
 use common::utils::{find_pid_by_name, open_process};
 
 use windows_sys::Win32::Foundation::{FALSE, GetLastError, HMODULE};
@@ -31,7 +31,7 @@ fn main() {
         .expect("Couldn't get victim handle. Is victim still running?");
 
     // Allocate Memory for DLL Path
-    let alloc_addr = RemoteAllocRAII::new(&victim, dll_path.len() * 2, PAGE_READWRITE)
+    let alloc_addr = ManagedVirtualAllocEx::new(&victim, dll_path.len() * 2, PAGE_READWRITE)
         .expect("Failed to Allocate Adrress on Process");
 
     // Write DLL Path to Memory
@@ -89,7 +89,7 @@ fn main() {
             std::ptr::null_mut(),
         )
     };
-    let thread_h = HandleRAII::new(thread_h_raw).expect("Unable to Retrieve Thread Handle");
+    let thread_h = ManagedHandle::new(thread_h_raw).expect("Unable to Retrieve Thread Handle");
 
     // Wait for Running
     unsafe {

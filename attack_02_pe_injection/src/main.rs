@@ -1,7 +1,10 @@
 use std::fs;
 use std::ptr;
 
+use common::raii::ManagedVirtualAlloc;
 use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_NT_HEADERS64;
+use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_SECTION_HEADER;
+use windows_sys::Win32::System::Memory::PAGE_READWRITE;
 use windows_sys::Win32::System::SystemServices::IMAGE_DOS_HEADER; 
 
 fn main() {
@@ -55,18 +58,42 @@ fn main() {
     println!("\nPE Information");
     println!();
     println!("[DOS Header]");
-    println!("  e_magic      : {:#06x}  ({:?})", magic, "MZ");
-    println!("  e_lfanew     : {:#x}  (NT header offset)", lfanew);
+    println!("  e_magic      : {:#06x} ({})", magic, "MZ");
+    println!("  e_lfanew     : {:#x} (NT header offset)", lfanew);
     println!();
     println!("[NT Headers]");
-    println!("  Signature    : {:#010x}  (\"PE\\0\\0\")", sig);
-    println!();
-    println!("[File Header]");
-    println!("  Machine      : {:#06x}  ({})", machine, machine_str);
+    println!("  Signature    : {:#010x} (\"PE\")", sig);
+    println!("  Machine      : {:#06x} ({})", machine, machine_str);
     println!("  Sections     : {}", sections_count);
-    println!();
-    println!("[Optional Header]");
-    println!("  Magic        : {:#06x}  ({})", opt_magic, opt_magic_str);
+    println!("  Magic        : {:#06x} ({})", opt_magic, opt_magic_str);
     println!("  ImageBase    : {:#018x}", img_base);
-    println!("  SizeOfImage  : {:#x}  ({} bytes)", size_of_img, size_of_img);
+    println!("  SizeOfImage  : {:#x} ({} bytes)", size_of_img, size_of_img);
+
+    println!();
+    println!("[Section Headers]");
+    let base_offset = lfanew as usize + size_of::<IMAGE_NT_HEADERS64>();
+
+    // alloc
+
+    for section_idx in 0..sections_count {
+        let section_offset = base_offset + section_idx as usize * size_of::<IMAGE_SECTION_HEADER>();
+        let img_section_h_offset = unsafe { pe.as_ptr().add(section_offset) };
+        let img_section_h = unsafe { ptr::read_unaligned(img_section_h_offset as *const IMAGE_SECTION_HEADER) };
+
+        let name = str::from_utf8(&img_section_h.Name).unwrap_or("unknown").trim_end_matches('\0');
+        let rva = img_section_h.VirtualAddress;
+        let vsize = unsafe { img_section_h.Misc.VirtualSize } as usize;
+        let characteristic = img_section_h.Characteristics;
+
+        println!("  {name}");
+        println!("    Virtual Address : {rva}");
+        println!("    Virtual Size    : {vsize}");
+        println!("    Characteristics : {characteristic:#x}");
+        
+        // copy/write this section image to the allocated adress
+        // ...
+    }
+
+    // loop to fix reloc table
+    // ...
 }
