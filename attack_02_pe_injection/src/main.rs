@@ -1,9 +1,9 @@
 use std::ffi::CStr;
 use std::fs;
 use std::ptr;
-use std::ptr::read_unaligned;
 
 use common::raii::ManagedVirtualAlloc;
+use windows_sys::Win32::Foundation::HINSTANCE;
 use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_DIRECTORY_ENTRY_BASERELOC;
 use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_DIRECTORY_ENTRY_IMPORT;
@@ -11,11 +11,12 @@ use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_NT_HEADERS64;
 use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_SECTION_HEADER;
 use windows_sys::Win32::System::LibraryLoader::GetProcAddress;
 use windows_sys::Win32::System::LibraryLoader::LoadLibraryA;
-use windows_sys::Win32::System::Memory::PAGE_READWRITE;
+use windows_sys::Win32::System::Memory::PAGE_EXECUTE_READWRITE;
 use windows_sys::Win32::System::SystemServices::IMAGE_BASE_RELOCATION;
 use windows_sys::Win32::System::SystemServices::IMAGE_DOS_HEADER;
 use windows_sys::Win32::System::SystemServices::IMAGE_IMPORT_DESCRIPTOR;
 use windows_sys::Win32::System::SystemServices::IMAGE_ORDINAL_FLAG64;
+use windows_sys::core::BOOL;
  
 
 fn main() {
@@ -81,7 +82,7 @@ fn main() {
     let headers_sz = nt_h.OptionalHeader.SizeOfHeaders as usize;
 
     // Alloc
-    let alloc_base = ManagedVirtualAlloc::new(size_of_img, PAGE_READWRITE)
+    let alloc_base = ManagedVirtualAlloc::new(size_of_img, PAGE_EXECUTE_READWRITE)
         .expect("Failed to Allocate Memory for payload");
     let section_h_stride = size_of::<IMAGE_SECTION_HEADER>();
 
@@ -187,10 +188,10 @@ fn main() {
     let mut desc_ptr = unsafe { alloc_base.as_ptr().byte_add(import_va) as *const IMAGE_IMPORT_DESCRIPTOR };
 
     println!();
-    println!("[Imported DLLs]");
+    println!("[Imported Functions]");
 
     loop {
-        let desc = unsafe { read_unaligned(desc_ptr) };
+        let desc = unsafe { ptr::read_unaligned(desc_ptr) };
         if desc.FirstThunk == 0 { break; }
 
         let lib_name_ptr = unsafe { alloc_base.as_ptr().byte_add(desc.Name as usize) as *const u8 };
@@ -211,7 +212,7 @@ fn main() {
         loop {
             let thunk = unsafe {
                 // we have checked that this is a 64bit PE
-                read_unaligned(int_ptr)
+                ptr::read_unaligned(int_ptr)
             };
             if thunk == 0 { break; }
             
@@ -237,4 +238,14 @@ fn main() {
 
         desc_ptr = unsafe { desc_ptr.add(1) };
     }
+
+    // Find the function and call it
+    let dll_main_fn_ptr = unsafe { alloc_base.as_ptr().byte_add(nt_h.OptionalHeader.AddressOfEntryPoint as usize) };
+    type DllMainFunc = unsafe extern "system" fn(HINSTANCE, u32, *mut std::ffi::c_void) -> BOOL;
+    let dll_main: DllMainFunc = unsafe { std::mem::transmute(dll_main_fn_ptr) };
+
+    let res = unsafe { dll_main(alloc_base.as_ptr(), 1, std::ptr::null_mut()) };
+
+    println!("DLL calls return {res}");
+    std::thread::sleep(std::time::Duration::from_secs(10));
 }
