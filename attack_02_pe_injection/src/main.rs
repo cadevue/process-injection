@@ -1,13 +1,22 @@
+use std::ffi::CStr;
 use std::fs;
 use std::ptr;
+use std::ptr::read_unaligned;
 
 use common::raii::ManagedVirtualAlloc;
+use windows_sys::Win32::Foundation::HMODULE;
 use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_DIRECTORY_ENTRY_BASERELOC;
+use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_DIRECTORY_ENTRY_IMPORT;
 use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_NT_HEADERS64;
 use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_SECTION_HEADER;
+use windows_sys::Win32::System::LibraryLoader::GetProcAddress;
+use windows_sys::Win32::System::LibraryLoader::LoadLibraryA;
 use windows_sys::Win32::System::Memory::PAGE_READWRITE;
 use windows_sys::Win32::System::SystemServices::IMAGE_BASE_RELOCATION;
-use windows_sys::Win32::System::SystemServices::IMAGE_DOS_HEADER; 
+use windows_sys::Win32::System::SystemServices::IMAGE_DOS_HEADER;
+use windows_sys::Win32::System::SystemServices::IMAGE_IMPORT_DESCRIPTOR;
+use windows_sys::Win32::System::SystemServices::IMAGE_ORDINAL_FLAG64;
+ 
 
 fn main() {
     // Extract Payload Path
@@ -124,9 +133,9 @@ fn main() {
         };
         let reloc_end = unsafe { curr_table.byte_add(reloc_sz) };
 
-        println!();
-        println!("[Relocation Table]");
-        while curr_table < reloc_end
+        // println!();
+        // println!("[Relocation Table]");
+        loop
         {
             let reloc_h = unsafe { ptr::read_unaligned(curr_table) };
 
@@ -135,19 +144,19 @@ fn main() {
 
             if block_sz == 0 { break; }
 
-            println!("  VirtualAddress :  {block_va:#x}");
-            println!("  Size of Block  :  {block_sz:#x}");
+            // println!("  VirtualAddress :  {block_va:#x}");
+            // println!("  Size of Block  :  {block_sz:#x}");
 
             let table_end = unsafe { curr_table.byte_add(block_sz) as *const u16 };
             let mut curr_entry = unsafe { curr_table.byte_add(8) as *const u16 };
 
-            while curr_entry < table_end {
+            loop {
                 let entry = unsafe { ptr::read_unaligned(curr_entry) };
                 let reloc_type = entry >> 12;
 
                 if reloc_type != 0 {
                     let reloc_offset = (entry & 0x0FFF) as usize;
-                    println!("    Reloc Type: {reloc_type:#x}; Reloc Offset: {reloc_offset:#x}");
+                    // println!("    Reloc Type: {reloc_type:#x}; Reloc Offset: {reloc_offset:#x}");
 
                     let reloc_target_addr = unsafe { 
                         alloc_base.as_ptr().byte_add(block_va as usize).byte_add(reloc_offset) 
@@ -165,9 +174,67 @@ fn main() {
                 }
 
                 curr_entry = unsafe { curr_entry.add(1) };
+                if curr_entry >= table_end { break; }
             }
 
             curr_table = table_end as *const IMAGE_BASE_RELOCATION;
+            if curr_table >= reloc_end  { break; }
         }
+    }
+
+    let import_dir = nt_h.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT as usize];
+    let import_va = import_dir.VirtualAddress as usize;
+    let mut desc_ptr = unsafe { alloc_base.as_ptr().byte_add(import_va) as *const IMAGE_IMPORT_DESCRIPTOR };
+
+    println!();
+    println!("[Imported DLLs]");
+
+    loop {
+        let desc = unsafe { read_unaligned(desc_ptr) };
+        if desc.FirstThunk == 0 { break; }
+
+        let lib_name_ptr = unsafe { alloc_base.as_ptr().byte_add(desc.Name as usize) as *const u8 };
+        let lib_name = unsafe { CStr::from_ptr(lib_name_ptr as *const i8).to_string_lossy() };
+        let hmod: HMODULE = unsafe { LoadLibraryA(lib_name_ptr) };
+
+        if hmod.is_null() {
+            println!("Something went wrong when loading {lib_name}");
+            desc_ptr = unsafe { desc_ptr.add(1) };
+            continue;
+        }
+
+        println!("  {lib_name}");
+
+        let mut int_ptr = unsafe { alloc_base.as_ptr().byte_add(desc.Anonymous.OriginalFirstThunk as usize) as *const u64};
+        let mut iat_ptr = unsafe { alloc_base.as_ptr().byte_add(desc.FirstThunk as usize) as *mut u64 };
+
+        loop {
+            let thunk = unsafe {
+                // we have checked that this is a 64bit PE
+                read_unaligned(int_ptr)
+            };
+            if thunk == 0 { break; }
+            
+            unsafe { 
+                let fn_addr: u64;
+                if (thunk & IMAGE_ORDINAL_FLAG64) != 0 {
+                    fn_addr = GetProcAddress(hmod, (thunk & 0xFFFF) as *const u8).unwrap() as u64;
+                } else {
+                    let ibn = alloc_base.as_ptr().byte_add((thunk & 0x7FFFFFFF) as usize) as *const u8; 
+                    let name_ptr = ibn.add(2);
+
+                    let fn_name_str = CStr::from_ptr(name_ptr as *const i8).to_string_lossy();
+                    println!("    {fn_name_str}");
+
+                    fn_addr = GetProcAddress(hmod, name_ptr).unwrap() as u64;
+                };
+
+                std::ptr::write_unaligned(iat_ptr, fn_addr);
+                int_ptr = int_ptr.add(1);
+                iat_ptr = iat_ptr.add(1);
+            }
+        }
+
+        desc_ptr = unsafe { desc_ptr.add(1) };
     }
 }
