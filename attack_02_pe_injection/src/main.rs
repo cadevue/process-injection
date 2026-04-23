@@ -2,9 +2,11 @@ use std::fs;
 use std::ptr;
 
 use common::raii::ManagedVirtualAlloc;
+use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_DIRECTORY_ENTRY_BASERELOC;
 use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_NT_HEADERS64;
 use windows_sys::Win32::System::Diagnostics::Debug::IMAGE_SECTION_HEADER;
 use windows_sys::Win32::System::Memory::PAGE_READWRITE;
+use windows_sys::Win32::System::SystemServices::IMAGE_BASE_RELOCATION;
 use windows_sys::Win32::System::SystemServices::IMAGE_DOS_HEADER; 
 
 fn main() {
@@ -13,8 +15,8 @@ fn main() {
     let dll_path = std::path::PathBuf::from(dll_path_arg).canonicalize().expect("DLL path is invalid or not found");
 
     // Read PE File
-    let pe = fs::read(dll_path).expect("Failed to read the payload PE");
-    let dos_h = unsafe { ptr::read_unaligned(pe.as_ptr() as *const IMAGE_DOS_HEADER) };
+    let pe_base = fs::read(dll_path).expect("Failed to read the payload PE");
+    let dos_h = unsafe { ptr::read_unaligned(pe_base.as_ptr() as *const IMAGE_DOS_HEADER) };
 
     let magic = dos_h.e_magic;
     let lfanew = dos_h.e_lfanew;
@@ -24,7 +26,7 @@ fn main() {
         return;
     }
 
-    let nt_h = unsafe { ptr::read_unaligned(pe.as_ptr().add(lfanew as usize) as *const IMAGE_NT_HEADERS64) };
+    let nt_h = unsafe { ptr::read_unaligned(pe_base.as_ptr().add(lfanew as usize) as *const IMAGE_NT_HEADERS64) };
 
     let sig = nt_h.Signature;
     if sig != 0x00004550 {
@@ -37,10 +39,7 @@ fn main() {
         println!("not PE32+ (expected 0x20B, found {:#x}) — 32-bit PE not supported", opt_magic);
         return;
     }
-    let opt_magic_str = match opt_magic {
-        0x20B => "PE32+",
-        _ => "unknown",
-    };
+    let opt_magic_str = "PE32+";
 
     let machine = nt_h.FileHeader.Machine;
     let machine_str = match machine {
@@ -72,19 +71,21 @@ fn main() {
     println!("[Section Headers]");
     let headers_sz = nt_h.OptionalHeader.SizeOfHeaders as usize;
 
-    // alloc
-    let alloc = ManagedVirtualAlloc::new(size_of_img, PAGE_READWRITE)
+    // Alloc
+    let alloc_base = ManagedVirtualAlloc::new(size_of_img, PAGE_READWRITE)
         .expect("Failed to Allocate Memory for payload");
-    let section_h_size = size_of::<IMAGE_SECTION_HEADER>();
+    let section_h_stride = size_of::<IMAGE_SECTION_HEADER>();
 
     unsafe {
-        ptr::copy_nonoverlapping(pe.as_ptr(), alloc.as_ptr() as *mut u8, headers_sz);
+        // Copy headers
+        ptr::copy_nonoverlapping(pe_base.as_ptr(), alloc_base.as_ptr() as *mut u8, headers_sz);
     }
 
-    let base_offset = lfanew as usize + size_of::<IMAGE_NT_HEADERS64>();
+    let section_base = lfanew as usize + size_of::<IMAGE_NT_HEADERS64>();
+
     for section_idx in 0..sections_count {
-        let section_offset = base_offset + section_idx as usize * section_h_size;
-        let img_section_h_offset = unsafe { pe.as_ptr().add(section_offset) };
+        let section_offset = section_base + section_idx as usize * section_h_stride;
+        let img_section_h_offset = unsafe { pe_base.as_ptr().add(section_offset) };
         let img_section_h = unsafe { ptr::read_unaligned(img_section_h_offset as *const IMAGE_SECTION_HEADER) };
 
         let name = str::from_utf8(&img_section_h.Name).unwrap_or("unknown").trim_end_matches('\0');
@@ -96,14 +97,14 @@ fn main() {
 
         println!("  {name}");
         println!("    Pointer to Raw Data : {r_addr:#x}");
-        println!("    Raw Data Size       : {r_data_sz:#x}");
+        println!("    Raw Data Size       : {r_data_sz}");
         println!("    Virtual Address     : {rva:#x}");
-        println!("    Virtual Size        : {vsize:#x}");
+        println!("    Virtual Size        : {vsize}");
         println!("    Characteristics     : {characteristic:#x}");
         
         // copy/write this section image to the allocated adress
-        let pe_loc = unsafe { pe.as_ptr().add(r_addr) };
-        let dst_alloc = unsafe { alloc.as_ptr().add(rva) };
+        let pe_loc = unsafe { pe_base.as_ptr().add(r_addr) };
+        let dst_alloc = unsafe { alloc_base.as_ptr().add(rva) };
 
         let sec_cp_sz = std::cmp::min(vsize, r_data_sz);
         unsafe {
@@ -112,6 +113,61 @@ fn main() {
         // ...
     }
 
+    let delta = (alloc_base.as_ptr() as u64).wrapping_sub(img_base);
+
     // loop to fix reloc table
-    // ...
+    let reloc_dir = nt_h.OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_BASERELOC as usize];
+    let reloc_sz = reloc_dir.Size as usize;
+    if delta != 0 && reloc_sz != 0 {
+        let mut curr_table = unsafe { 
+            alloc_base.as_ptr().add(reloc_dir.VirtualAddress as usize) as *const IMAGE_BASE_RELOCATION
+        };
+        let reloc_end = unsafe { curr_table.byte_add(reloc_sz) };
+
+        println!();
+        println!("[Relocation Table]");
+        while curr_table < reloc_end
+        {
+            let reloc_h = unsafe { ptr::read_unaligned(curr_table) };
+
+            let block_va = reloc_h.VirtualAddress;
+            let block_sz = reloc_h.SizeOfBlock as usize;
+
+            if block_sz == 0 { break; }
+
+            println!("  VirtualAddress :  {block_va:#x}");
+            println!("  Size of Block  :  {block_sz:#x}");
+
+            let table_end = unsafe { curr_table.byte_add(block_sz) as *const u16 };
+            let mut curr_entry = unsafe { curr_table.byte_add(8) as *const u16 };
+
+            while curr_entry < table_end {
+                let entry = unsafe { ptr::read_unaligned(curr_entry) };
+                let reloc_type = entry >> 12;
+
+                if reloc_type != 0 {
+                    let reloc_offset = (entry & 0x0FFF) as usize;
+                    println!("    Reloc Type: {reloc_type:#x}; Reloc Offset: {reloc_offset:#x}");
+
+                    let reloc_target_addr = unsafe { 
+                        alloc_base.as_ptr().byte_add(block_va as usize).byte_add(reloc_offset) 
+                    };
+
+                    if reloc_type == 3 {
+                        let reloc_target_addr = reloc_target_addr as *mut u32;
+                        let reloc_target_val = unsafe { ptr::read_unaligned(reloc_target_addr) };
+                        unsafe { ptr::write_unaligned(reloc_target_addr, reloc_target_val.wrapping_add(delta as u32)); }
+                    } else if reloc_type == 10 {
+                        let reloc_target_addr = reloc_target_addr as *mut u64;
+                        let reloc_target_val = unsafe { ptr::read_unaligned(reloc_target_addr) };
+                        unsafe { ptr::write_unaligned(reloc_target_addr, reloc_target_val.wrapping_add(delta as u64)); }
+                    }
+                }
+
+                curr_entry = unsafe { curr_entry.add(1) };
+            }
+
+            curr_table = table_end as *const IMAGE_BASE_RELOCATION;
+        }
+    }
 }
